@@ -198,27 +198,41 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
 
     total_lane_rows = sum(row_lane_counts.values())
 
-    # --- crop stage as x-axis tick labels: "Stage name<br>start-end" ---
-    xaxis = dict(showgrid=True, title="Day after planting (crop growth stage)")
+    # --- x-axis: regular day ticks (0, 20, 40, ...) as the main axis,
+    #     with stage names as a second label row underneath ---
+    xaxis = dict(showgrid=True, title="Day after planting")
+    stage_annotations = []
     if stage_df is not None and not stage_df.empty:
         sdf = stage_df.sort_values("start_day").reset_index(drop=True)
         stage_min = float(sdf["start_day"].min())
         stage_max = float(sdf["end_day"].max())
         span = stage_max - stage_min
-        tickvals = [(r["start_day"] + r["end_day"]) / 2 for _, r in sdf.iterrows()]
-        ticktext = [f"{r[stage_label_col]}<br>{int(r['start_day'])}-{int(r['end_day'])}d"
-                    for _, r in sdf.iterrows()]
+
+        step = 20
+        day_ticks = list(range(0, int(stage_max) + 1, step))
+        if not day_ticks or day_ticks[-1] != int(stage_max):
+            day_ticks.append(int(stage_max))
+
         xaxis.update(
             tickmode="array",
-            tickvals=tickvals,
-            ticktext=ticktext,
+            tickvals=day_ticks,
+            ticktext=[str(t) for t in day_ticks],
             range=[stage_min - span * 0.02, stage_max + span * 0.02],
         )
 
+        for _, r in sdf.iterrows():
+            mid = (r["start_day"] + r["end_day"]) / 2
+            stage_annotations.append(dict(
+                x=mid, y=-0.16, xref="x", yref="paper",
+                text=str(r[stage_label_col]), showarrow=False,
+                font=dict(color=RULER_TEXT, size=12, family="Georgia, serif"),
+                yanchor="top",
+            ))
+
     fig.update_layout(
         barmode="overlay",
-        height=max(200, 110 + total_lane_rows * 42),
-        margin=dict(l=10, r=10, t=45, b=10),
+        height=max(220, 130 + total_lane_rows * 42),
+        margin=dict(l=10, r=10, t=45, b=60),
         xaxis=xaxis,
         yaxis=dict(
             tickmode="array",
@@ -228,6 +242,7 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             title="",
         ),
         title=title,
+        annotations=stage_annotations,
         showlegend=multi_category and show_legend,
         legend_title_text=color_col,
     )
