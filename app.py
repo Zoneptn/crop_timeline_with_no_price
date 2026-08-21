@@ -1,17 +1,17 @@
 """
 Crop Threat & Input Dashboard
 ------------------------------
-Top track: crop growth stage reference timeline (always shown).
-Bottom track: ONE swappable board at a time — Weed / Pest / Disease /
-Fertilizer — selected from the sidebar.
+Top track: a continuous rice growth timeline (0 -> last day), stage
+boundaries marked as ruler ticks, stage names as labels between ticks —
+like a ruler, not separate colored chips.
 
-Rendering notes:
-  - Labels are drawn as annotations (not bar-internal text), so they never
-    silently disappear on narrow blocks. Narrow blocks get vertical text.
-  - When a row (e.g. a single weed) has more than one entry that overlaps
-    in time — multiple chemicals tackling the same weed/stage — each entry
-    gets its own sub-lane inside that row instead of hiding behind another
-    block.
+Bottom track: ONE swappable board at a time — Weed / Pest / Disease /
+Fertilizer — selected from the sidebar. Each real-world window (a weed's
+pre-emergence window, a pest's pressure window, etc.) is ONE box, even if
+several chemicals/products apply to it — those are combined into that
+single box's label/hover, not drawn as separate side-by-side boxes.
+Only genuinely different time windows (e.g. two separate spray dates for
+the same weed) get their own box / sub-lane.
 
 Expected workbook: crop_timeline.xlsx, with sheets:
   crop_stage    : crop_id, crop, stage, stage_th, start_day, end_day
@@ -45,15 +45,14 @@ SHEET_NAMES = [
     "fertilizer",
 ]
 
-STAGE_COLORS = [
-    "#8ECAE6", "#219EBC", "#023047", "#FFB703", "#FB8500",
-    "#A7C957", "#6A994E", "#BC4749", "#9D4EDD", "#264653",
-]
-
 PALETTE = [
     "#457B9D", "#E76F51", "#2A9D8F", "#E9C46A", "#6A994E",
     "#BC4749", "#9D4EDD", "#F4A261", "#264653", "#A7C957",
 ]
+
+RULER_COLOR = "#CFE8D5"
+RULER_LINE = "#2E7D32"
+RULER_TEXT = "#1B4332"
 
 NARROW_DAY_THRESHOLD = 6  # below this many days, rotate the label vertical
 
@@ -70,7 +69,7 @@ def load_workbook(file):
             df.columns = [c.strip() for c in df.columns]
             sheets[name] = df
         except ValueError:
-            sheets[name] = pd.DataFrame()  # sheet not present
+            sheets[name] = pd.DataFrame()
     return sheets
 
 
@@ -85,17 +84,13 @@ def get_file():
 
 
 # ----------------------------------------------------------------------
-# Lane assignment — greedy interval scheduling so overlapping entries in
-# the same row get stacked into parallel sub-lanes instead of hiding
-# behind one another.
+# Lane assignment — only kicks in for genuinely different, overlapping
+# time windows within the same row (e.g. two distinct spray dates for
+# the same weed). Duplicate chemical rows for the SAME window are merged
+# upstream before this ever runs.
 # ----------------------------------------------------------------------
 
 def assign_lanes(group: pd.DataFrame):
-    """
-    group: rows belonging to ONE row-category (e.g. one weed), with
-    original dataframe index preserved.
-    Returns: {original_index: lane_number}, total_lanes
-    """
     lanes_end = []
     assignment = {}
     for idx, row in group.sort_values("start_day").iterrows():
@@ -113,12 +108,38 @@ def assign_lanes(group: pd.DataFrame):
 
 
 # ----------------------------------------------------------------------
-# Generic chart engine
+# Chemical aggregation — collapse multiple chemical/product rows that
+# belong to the SAME window (same weed/pest/disease + same start/end)
+# into one row with a combined chemical list, so the chart draws ONE box.
+# ----------------------------------------------------------------------
+
+def aggregate_chemicals(merged: pd.DataFrame, group_cols: list,
+                         name_col: str, code_col: str, code_label: str):
+    def _agg(g):
+        pairs = [
+            (str(n).strip(), str(c).strip())
+            for n, c in zip(g[name_col], g[code_col])
+            if pd.notna(n) or pd.notna(c)
+        ]
+        pairs = [p for p in pairs if p[0] not in ("", "nan") or p[1] not in ("", "nan")]
+        count = len(pairs)
+        if count:
+            chem_html = "<br>".join(f"• {n} ({code_label} {c})" for n, c in pairs)
+        else:
+            chem_html = "—"
+        return pd.Series({"chem_count": count, "chem_list_html": chem_html})
+
+    agg = merged.groupby(group_cols, dropna=False).apply(_agg).reset_index()
+    return agg
+
+
+# ----------------------------------------------------------------------
+# Generic chart engine for the swappable boards
 # ----------------------------------------------------------------------
 
 def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
                           color_col: str, hover_fn, title: str,
-                          show_legend: bool = True) -> go.Figure:
+                          x_range=None, show_legend: bool = True) -> go.Figure:
     if df.empty:
         fig = go.Figure()
         fig.update_layout(height=120, title=f"{title} — no data for this crop")
@@ -140,7 +161,7 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
         lane_map, n_lanes = assign_lanes(group)
         row_lane_counts[row_val] = n_lanes
         base_y = row_to_base[row_val]
-        lane_height = min(0.8 / n_lanes, 0.4)
+        lane_height = min(0.8 / n_lanes, 0.5)
 
         for idx, lane in lane_map.items():
             row = df.loc[idx]
@@ -165,6 +186,9 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             ))
 
             label = str(row[label_col])
+            chem_count = row.get("chem_count", None)
+            if chem_count is not None and chem_count > 1:
+                label = f"{label} ({int(chem_count)} products)"
             angle = -90 if duration < NARROW_DAY_THRESHOLD else 0
             annotations.append(dict(
                 x=row["start_day"] + duration / 2,
@@ -178,11 +202,14 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             ))
 
     total_lane_rows = sum(row_lane_counts.values())
+    xaxis = dict(showgrid=True, title="Day after planting")
+    if x_range:
+        xaxis["range"] = x_range
     fig.update_layout(
         barmode="overlay",
-        height=max(160, 70 + total_lane_rows * 40),
+        height=max(160, 70 + total_lane_rows * 42),
         margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(showgrid=True, title="Day after planting"),
+        xaxis=xaxis,
         yaxis=dict(
             tickmode="array",
             tickvals=[row_to_base[r] for r in row_order],
@@ -199,142 +226,171 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
 
 
 def build_stage_timeline(stage_df: pd.DataFrame, label_col: str) -> go.Figure:
-    """Single-track reference timeline of crop growth stages."""
+    """
+    Continuous ruler-style rice growth timeline: one seamless bar from
+    day 0 to the last day, stage boundaries as tick marks, stage names
+    as labels between the ticks, day numbers as the ruler's axis ticks.
+    """
     df = stage_df.sort_values("start_day").reset_index(drop=True).copy()
-    fig = go.Figure()
-    annotations = []
+    min_day = float(df["start_day"].min())
+    max_day = float(df["end_day"].max())
+    boundaries = sorted(set(df["start_day"].tolist() + df["end_day"].tolist()))
 
-    for i, row in df.iterrows():
-        duration = row["end_day"] - row["start_day"]
-        color = STAGE_COLORS[i % len(STAGE_COLORS)]
-        label = str(row[label_col])
-        fig.add_trace(go.Bar(
-            x=[duration],
-            y=["Crop Stage"],
-            base=[row["start_day"]],
-            orientation="h",
-            marker=dict(color=color, line=dict(color="white", width=1)),
-            hovertemplate=f"<b>{label}</b><br>Day {row['start_day']}–{row['end_day']}<extra></extra>",
-            showlegend=False,
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=[max_day - min_day],
+        y=["Rice Growth Timeline"],
+        base=[min_day],
+        orientation="h",
+        marker=dict(color=RULER_COLOR, line=dict(color=RULER_LINE, width=1.5)),
+        width=0.5,
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    shapes = []
+    for b in boundaries:
+        shapes.append(dict(
+            type="line", xref="x", yref="y",
+            x0=b, x1=b, y0=-0.35, y1=0.35,
+            line=dict(color=RULER_LINE, width=1.5),
         ))
-        angle = -90 if duration < NARROW_DAY_THRESHOLD else 0
+
+    annotations = []
+    for _, row in df.iterrows():
+        mid = (row["start_day"] + row["end_day"]) / 2
         annotations.append(dict(
-            x=row["start_day"] + duration / 2,
-            y="Crop Stage",
-            text=label,
-            showarrow=False,
-            font=dict(color="white", size=12),
-            textangle=angle,
-            xanchor="center",
-            yanchor="middle",
+            x=mid, y=0.55, text=str(row[label_col]),
+            showarrow=False, yanchor="bottom",
+            font=dict(color=RULER_TEXT, size=12, family="Georgia, serif"),
         ))
 
     fig.update_layout(
-        barmode="overlay",
-        height=140,
-        margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(showgrid=True, title="Day after planting"),
-        yaxis=dict(showticklabels=False),
-        title="Crop Growth Stage (reference)",
+        height=150,
+        shapes=shapes,
         annotations=annotations,
+        margin=dict(l=10, r=10, t=40, b=10),
+        xaxis=dict(
+            tickmode="array",
+            tickvals=boundaries,
+            ticktext=[str(int(b)) for b in boundaries],
+            range=[min_day - max_day * 0.02, max_day + max_day * 0.02],
+            title="Day after planting",
+            showgrid=True,
+        ),
+        yaxis=dict(showticklabels=False, range=[-0.6, 1]),
+        title=f"Rice Growth Timeline (0–{int(max_day)} days)",
+        bargap=0,
     )
-    return fig
+    return fig, (min_day - max_day * 0.02, max_day + max_day * 0.02)
 
 
 # ----------------------------------------------------------------------
 # Board configs
 # ----------------------------------------------------------------------
 
-def weed_board(crop_id, sheets):
+def weed_board(crop_id, sheets, x_range):
     weeds = sheets["crop_weeds"]
     her = sheets["weed_her"]
-    df = weeds[weeds["crop_id"] == crop_id].copy()
+    raw = weeds[weeds["crop_id"] == crop_id].copy()
     her_c = her[her["crop_id"] == crop_id]
-    df = df.merge(
+    merged = raw.merge(
         her_c[["ws_id", "weed_id", "common_name", "hrac_code"]],
         on=["ws_id", "weed_id"], how="left",
     )
+
+    group_cols = ["crop_id", "ws_id", "weed_id", "weed_stage", "weed_science",
+                  "weed_name_en", "weed_name_th", "type", "start_day", "end_day"]
+    agg = aggregate_chemicals(merged, group_cols, "common_name", "hrac_code", "HRAC")
+    df = merged[group_cols].drop_duplicates().merge(agg, on=group_cols)
 
     def hover(row):
         return (
             f"<b><i>{row['weed_science']}</i></b><br>"
             f"{row['weed_name_en']} / {row['weed_name_th']}<br>"
             f"Stage: {row.get('weed_stage', '')}<br>"
-            f"Common name: {row.get('common_name', '')}<br>"
-            f"HRAC code: {row.get('hrac_code', '')}<br>"
-            f"Day {row['start_day']}–{row['end_day']}<extra></extra>"
+            f"Day {row['start_day']}–{row['end_day']}<br>"
+            f"<br><b>Products:</b><br>{row['chem_list_html']}"
+            "<extra></extra>"
         )
 
-    # row = which weed (so the y-axis tells you the target weed);
-    # block label = spray stage (pre-emergence, post-emergence, ...),
-    # since that's what you want visible on the block itself.
     fig = build_timeline_chart(df, row_col="weed_science", label_col="weed_stage",
                                 color_col="type", hover_fn=hover,
-                                title="Weed Control Windows")
+                                title="Weed Control Windows", x_range=x_range)
     detail_cols = ["weed_stage", "weed_science", "weed_name_en", "weed_name_th",
                     "common_name", "hrac_code", "type", "start_day", "end_day"]
-    return fig, df, detail_cols
+    return fig, merged[detail_cols], detail_cols
 
 
-def pest_board(crop_id, sheets):
+def pest_board(crop_id, sheets, x_range):
     pest = sheets["crop_pest"]
     ins = sheets["pest_ins"]
-    df = pest[pest["crop_id"] == crop_id].copy()
+    raw = pest[pest["crop_id"] == crop_id].copy()
     ins_c = ins[ins["crop_id"] == crop_id]
-    df = df.merge(
+    merged = raw.merge(
         ins_c[["pest_id", "common_name", "irac_code"]],
         on="pest_id", how="left",
     )
+
+    group_cols = ["crop_id", "pest_id", "pest_name_en", "pest_name_th",
+                  "order", "start_day", "end_day"]
+    agg = aggregate_chemicals(merged, group_cols, "common_name", "irac_code", "IRAC")
+    df = merged[group_cols].drop_duplicates().merge(agg, on=group_cols)
 
     def hover(row):
         return (
             f"<b>{row['pest_name_en']}</b><br>"
             f"{row['pest_name_th']}<br>"
             f"Order: {row.get('order', '')}<br>"
-            f"Common name: {row.get('common_name', '')}<br>"
-            f"IRAC code: {row.get('irac_code', '')}<br>"
-            f"Day {row['start_day']}–{row['end_day']}<extra></extra>"
+            f"Day {row['start_day']}–{row['end_day']}<br>"
+            f"<br><b>Products:</b><br>{row['chem_list_html']}"
+            "<extra></extra>"
         )
 
     fig = build_timeline_chart(df, row_col="pest_name_en", label_col="pest_name_en",
                                 color_col="order", hover_fn=hover,
-                                title="Pest Pressure Windows")
+                                title="Pest Pressure Windows", x_range=x_range)
     detail_cols = ["pest_name_en", "pest_name_th", "order", "common_name",
                    "irac_code", "start_day", "end_day"]
-    return fig, df, detail_cols
+    return fig, merged[detail_cols], detail_cols
 
 
-def disease_board(crop_id, sheets):
+def disease_board(crop_id, sheets, x_range):
     dis = sheets["crop_disease"]
     fun = sheets["disease_fun"]
-    df = dis[dis["crop_id"] == crop_id].copy()
+    raw = dis[dis["crop_id"] == crop_id].copy()
     fun_c = fun[fun["crop_id"] == crop_id]
-    df = df.merge(
+    merged = raw.merge(
         fun_c[["disease_id", "common_name", "frac_code"]],
         on="disease_id", how="left",
     )
+
+    group_cols = ["crop_id", "disease_id", "disease_name_en", "disease_name_th",
+                  "disease_name_sc", "type", "start_day", "end_day"]
+    agg = aggregate_chemicals(merged, group_cols, "common_name", "frac_code", "FRAC")
+    df = merged[group_cols].drop_duplicates().merge(agg, on=group_cols)
 
     def hover(row):
         return (
             f"<b><i>{row['disease_name_sc']}</i></b><br>"
             f"{row['disease_name_en']} / {row['disease_name_th']}<br>"
-            f"Common name: {row.get('common_name', '')}<br>"
-            f"FRAC code: {row.get('frac_code', '')}<br>"
-            f"Day {row['start_day']}–{row['end_day']}<extra></extra>"
+            f"Day {row['start_day']}–{row['end_day']}<br>"
+            f"<br><b>Products:</b><br>{row['chem_list_html']}"
+            "<extra></extra>"
         )
 
     fig = build_timeline_chart(df, row_col="disease_name_sc", label_col="disease_name_sc",
                                 color_col="type", hover_fn=hover,
-                                title="Disease Pressure Windows")
+                                title="Disease Pressure Windows", x_range=x_range)
     detail_cols = ["disease_name_sc", "disease_name_en", "disease_name_th",
                    "common_name", "frac_code", "type", "start_day", "end_day"]
-    return fig, df, detail_cols
+    return fig, merged[detail_cols], detail_cols
 
 
-def fertilizer_board(crop_id, sheets):
+def fertilizer_board(crop_id, sheets, x_range):
     fert = sheets["fertilizer"]
     df = fert[fert["crop_id"] == crop_id].copy()
-    df["_none"] = "Fertilizer"  # single-category color column, no legend needed
+    df["_none"] = "Fertilizer"
 
     def hover(row):
         return (
@@ -345,7 +401,7 @@ def fertilizer_board(crop_id, sheets):
     fig = build_timeline_chart(df, row_col="formula", label_col="formula",
                                 color_col="_none", hover_fn=hover,
                                 title="Fertilizer Application Windows",
-                                show_legend=False)
+                                x_range=x_range, show_legend=False)
     detail_cols = ["formula", "start_day", "end_day"]
     return fig, df, detail_cols
 
@@ -401,13 +457,14 @@ if crop_stage_df.empty:
     st.warning("No stage data for this crop.")
     st.stop()
 
-st.plotly_chart(build_stage_timeline(crop_stage_df, label_col), use_container_width=True)
+stage_fig, x_range = build_stage_timeline(crop_stage_df, label_col)
+st.plotly_chart(stage_fig, use_container_width=True)
 
-fig, board_df, detail_cols = BOARDS[board_choice](crop_id, sheets)
+fig, board_df, detail_cols = BOARDS[board_choice](crop_id, sheets, x_range)
 st.plotly_chart(fig, use_container_width=True)
 
 if board_df.empty:
     st.info(f"No {board_choice.lower()} data for this crop.")
 else:
-    with st.expander(f"{board_choice} detail table"):
-        st.dataframe(board_df[detail_cols], use_container_width=True, hide_index=True)
+    with st.expander(f"{board_choice} detail table (one row per product)"):
+        st.dataframe(board_df, use_container_width=True, hide_index=True)
