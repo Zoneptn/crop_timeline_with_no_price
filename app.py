@@ -76,6 +76,9 @@ def load_workbook(file):
 def get_file():
     st.sidebar.subheader("Data source")
     uploaded = st.sidebar.file_uploader("Upload workbook (.xlsx)", type=["xlsx"])
+    if st.sidebar.button("🔄 Reload data"):
+        st.cache_data.clear()
+        st.rerun()
     if uploaded is not None:
         return uploaded
     if os.path.exists(DEFAULT_PATH):
@@ -137,9 +140,18 @@ def aggregate_chemicals(merged: pd.DataFrame, group_cols: list,
 # Generic chart engine for the swappable boards
 # ----------------------------------------------------------------------
 
+STAGE_BAND_COLORS = ["#F1FAEE", "#E4F1E8"]  # alternating very-light bands
+
+
 def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
                           color_col: str, hover_fn, title: str,
-                          x_range=None, show_legend: bool = True) -> go.Figure:
+                          stage_df: pd.DataFrame = None, stage_label_col: str = "stage",
+                          show_legend: bool = True) -> go.Figure:
+    """
+    Single plot: crop growth stage shown as background bands + boundary
+    lines + labels along the top, with the board's rows/boxes drawn on
+    top of it — not a separate chart.
+    """
     if df.empty:
         fig = go.Figure()
         fig.update_layout(height=120, title=f"{title} — no data for this crop")
@@ -147,16 +159,49 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
 
     row_order = df.groupby(row_col)["start_day"].min().sort_values().index.tolist()
     row_to_base = {r: i for i, r in enumerate(row_order)}
+    n_rows = len(row_order)
 
     color_values = sorted(df[color_col].dropna().astype(str).unique().tolist())
     color_map = {v: PALETTE[i % len(PALETTE)] for i, v in enumerate(color_values)}
     multi_category = len(color_values) > 1
 
     fig = go.Figure()
+    shapes = []
     annotations = []
+
+    # --- crop stage background: bands + boundary lines + top labels ---
+    stage_min, stage_max = None, None
+    if stage_df is not None and not stage_df.empty:
+        sdf = stage_df.sort_values("start_day").reset_index(drop=True)
+        stage_min = float(sdf["start_day"].min())
+        stage_max = float(sdf["end_day"].max())
+        boundaries = sorted(set(sdf["start_day"].tolist() + sdf["end_day"].tolist()))
+
+        for i, srow in sdf.iterrows():
+            shapes.append(dict(
+                type="rect", xref="x", yref="y",
+                x0=srow["start_day"], x1=srow["end_day"],
+                y0=-0.5, y1=n_rows - 0.5,
+                fillcolor=STAGE_BAND_COLORS[i % len(STAGE_BAND_COLORS)],
+                line=dict(width=0), layer="below",
+            ))
+            mid = (srow["start_day"] + srow["end_day"]) / 2
+            annotations.append(dict(
+                x=mid, y=1.0, xref="x", yref="paper",
+                text=str(srow[stage_label_col]), showarrow=False,
+                yanchor="bottom",
+                font=dict(color=RULER_TEXT, size=12, family="Georgia, serif"),
+            ))
+        for b in boundaries:
+            shapes.append(dict(
+                type="line", xref="x", yref="paper",
+                x0=b, x1=b, y0=0, y1=1,
+                line=dict(color=RULER_LINE, width=1, dash="dot"),
+            ))
+
+    # --- board rows/boxes ---
     seen_legend = set()
     row_lane_counts = {}
-
     for row_val, group in df.groupby(row_col):
         lane_map, n_lanes = assign_lanes(group)
         row_lane_counts[row_val] = n_lanes
@@ -185,39 +230,26 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
                 showlegend=show_this_legend,
             ))
 
-            label = str(row[label_col])
-            chem_count = row.get("chem_count", None)
-            if chem_count is not None and chem_count > 1:
-                label = f"{label} ({int(chem_count)} products)"
-            angle = -90 if duration < NARROW_DAY_THRESHOLD else 0
-            annotations.append(dict(
-                x=row["start_day"] + duration / 2,
-                y=y_center,
-                text=label,
-                showarrow=False,
-                font=dict(color="white", size=11, family="Georgia, serif"),
-                textangle=angle,
-                xanchor="center",
-                yanchor="middle",
-            ))
-
     total_lane_rows = sum(row_lane_counts.values())
     xaxis = dict(showgrid=True, title="Day after planting")
-    if x_range:
-        xaxis["range"] = x_range
+    if stage_min is not None:
+        span = stage_max - stage_min
+        xaxis["range"] = [stage_min - span * 0.02, stage_max + span * 0.02]
+
     fig.update_layout(
         barmode="overlay",
-        height=max(160, 70 + total_lane_rows * 42),
-        margin=dict(l=10, r=10, t=30, b=10),
+        height=max(200, 110 + total_lane_rows * 42),
+        margin=dict(l=10, r=10, t=45, b=10),
         xaxis=xaxis,
         yaxis=dict(
             tickmode="array",
             tickvals=[row_to_base[r] for r in row_order],
             ticktext=row_order,
-            range=[len(row_order) - 0.5, -0.5],
+            range=[n_rows - 0.5, -0.5],
             title="",
         ),
         title=title,
+        shapes=shapes,
         annotations=annotations,
         showlegend=multi_category and show_legend,
         legend_title_text=color_col,
@@ -225,71 +257,11 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
     return fig
 
 
-def build_stage_timeline(stage_df: pd.DataFrame, label_col: str) -> go.Figure:
-    """
-    Continuous ruler-style rice growth timeline: one seamless bar from
-    day 0 to the last day, stage boundaries as tick marks, stage names
-    as labels between the ticks, day numbers as the ruler's axis ticks.
-    """
-    df = stage_df.sort_values("start_day").reset_index(drop=True).copy()
-    min_day = float(df["start_day"].min())
-    max_day = float(df["end_day"].max())
-    boundaries = sorted(set(df["start_day"].tolist() + df["end_day"].tolist()))
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=[max_day - min_day],
-        y=["Rice Growth Timeline"],
-        base=[min_day],
-        orientation="h",
-        marker=dict(color=RULER_COLOR, line=dict(color=RULER_LINE, width=1.5)),
-        width=0.5,
-        hoverinfo="skip",
-        showlegend=False,
-    ))
-
-    shapes = []
-    for b in boundaries:
-        shapes.append(dict(
-            type="line", xref="x", yref="y",
-            x0=b, x1=b, y0=-0.35, y1=0.35,
-            line=dict(color=RULER_LINE, width=1.5),
-        ))
-
-    annotations = []
-    for _, row in df.iterrows():
-        mid = (row["start_day"] + row["end_day"]) / 2
-        annotations.append(dict(
-            x=mid, y=0.55, text=str(row[label_col]),
-            showarrow=False, yanchor="bottom",
-            font=dict(color=RULER_TEXT, size=12, family="Georgia, serif"),
-        ))
-
-    fig.update_layout(
-        height=150,
-        shapes=shapes,
-        annotations=annotations,
-        margin=dict(l=10, r=10, t=40, b=10),
-        xaxis=dict(
-            tickmode="array",
-            tickvals=boundaries,
-            ticktext=[str(int(b)) for b in boundaries],
-            range=[min_day - max_day * 0.02, max_day + max_day * 0.02],
-            title="Day after planting",
-            showgrid=True,
-        ),
-        yaxis=dict(showticklabels=False, range=[-0.6, 1]),
-        title=f"Rice Growth Timeline (0–{int(max_day)} days)",
-        bargap=0,
-    )
-    return fig, (min_day - max_day * 0.02, max_day + max_day * 0.02)
-
-
 # ----------------------------------------------------------------------
 # Board configs
 # ----------------------------------------------------------------------
 
-def weed_board(crop_id, sheets, x_range):
+def weed_board(crop_id, sheets, crop_stage_df, stage_label_col):
     weeds = sheets["crop_weeds"]
     her = sheets["weed_her"]
     raw = weeds[weeds["crop_id"] == crop_id].copy()
@@ -316,13 +288,14 @@ def weed_board(crop_id, sheets, x_range):
 
     fig = build_timeline_chart(df, row_col="weed_science", label_col="weed_stage",
                                 color_col="type", hover_fn=hover,
-                                title="Weed Control Windows", x_range=x_range)
+                                title="Weed Control Windows",
+                                stage_df=crop_stage_df, stage_label_col=stage_label_col)
     detail_cols = ["weed_stage", "weed_science", "weed_name_en", "weed_name_th",
                     "common_name", "hrac_code", "type", "start_day", "end_day"]
     return fig, merged[detail_cols], detail_cols
 
 
-def pest_board(crop_id, sheets, x_range):
+def pest_board(crop_id, sheets, crop_stage_df, stage_label_col):
     pest = sheets["crop_pest"]
     ins = sheets["pest_ins"]
     raw = pest[pest["crop_id"] == crop_id].copy()
@@ -349,13 +322,14 @@ def pest_board(crop_id, sheets, x_range):
 
     fig = build_timeline_chart(df, row_col="pest_name_en", label_col="pest_name_en",
                                 color_col="order", hover_fn=hover,
-                                title="Pest Pressure Windows", x_range=x_range)
+                                title="Pest Pressure Windows",
+                                stage_df=crop_stage_df, stage_label_col=stage_label_col)
     detail_cols = ["pest_name_en", "pest_name_th", "order", "common_name",
                    "irac_code", "start_day", "end_day"]
     return fig, merged[detail_cols], detail_cols
 
 
-def disease_board(crop_id, sheets, x_range):
+def disease_board(crop_id, sheets, crop_stage_df, stage_label_col):
     dis = sheets["crop_disease"]
     fun = sheets["disease_fun"]
     raw = dis[dis["crop_id"] == crop_id].copy()
@@ -381,13 +355,14 @@ def disease_board(crop_id, sheets, x_range):
 
     fig = build_timeline_chart(df, row_col="disease_name_sc", label_col="disease_name_sc",
                                 color_col="type", hover_fn=hover,
-                                title="Disease Pressure Windows", x_range=x_range)
+                                title="Disease Pressure Windows",
+                                stage_df=crop_stage_df, stage_label_col=stage_label_col)
     detail_cols = ["disease_name_sc", "disease_name_en", "disease_name_th",
                    "common_name", "frac_code", "type", "start_day", "end_day"]
     return fig, merged[detail_cols], detail_cols
 
 
-def fertilizer_board(crop_id, sheets, x_range):
+def fertilizer_board(crop_id, sheets, crop_stage_df, stage_label_col):
     fert = sheets["fertilizer"]
     df = fert[fert["crop_id"] == crop_id].copy()
     df["_none"] = "Fertilizer"
@@ -401,7 +376,8 @@ def fertilizer_board(crop_id, sheets, x_range):
     fig = build_timeline_chart(df, row_col="formula", label_col="formula",
                                 color_col="_none", hover_fn=hover,
                                 title="Fertilizer Application Windows",
-                                x_range=x_range, show_legend=False)
+                                stage_df=crop_stage_df, stage_label_col=stage_label_col,
+                                show_legend=False)
     detail_cols = ["formula", "start_day", "end_day"]
     return fig, df, detail_cols
 
@@ -457,10 +433,7 @@ if crop_stage_df.empty:
     st.warning("No stage data for this crop.")
     st.stop()
 
-stage_fig, x_range = build_stage_timeline(crop_stage_df, label_col)
-st.plotly_chart(stage_fig, use_container_width=True)
-
-fig, board_df, detail_cols = BOARDS[board_choice](crop_id, sheets, x_range)
+fig, board_df, detail_cols = BOARDS[board_choice](crop_id, sheets, crop_stage_df, label_col)
 st.plotly_chart(fig, use_container_width=True)
 
 if board_df.empty:
