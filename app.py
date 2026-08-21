@@ -50,6 +50,11 @@ PALETTE = [
     "#BC4749", "#9D4EDD", "#F4A261", "#264653", "#A7C957",
 ]
 
+STAGE_COLORS = [
+    "#8ECAE6", "#219EBC", "#023047", "#FFB703", "#FB8500",
+    "#A7C957", "#6A994E", "#BC4749", "#9D4EDD", "#264653",
+]
+
 RULER_COLOR = "#CFE8D5"
 RULER_LINE = "#2E7D32"
 RULER_TEXT = "#1B4332"
@@ -145,10 +150,10 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
                           stage_df: pd.DataFrame = None, stage_label_col: str = "stage",
                           show_legend: bool = True) -> go.Figure:
     """
-    Single plot. The crop growth stage isn't drawn as separate chart
-    elements — it's just the x-axis tick labels: each stage's name plus
-    its day range, positioned at that stage's midpoint. The board's
-    rows/boxes are drawn against that labeled axis.
+    Single plot. Crop growth stage is drawn as a real row at the top of
+    the SAME chart (same x/y coordinate space as the weed/pest/disease
+    boxes) — not a floating annotation outside the plot area, which was
+    getting clipped by the renderer.
     """
     if df.empty:
         fig = go.Figure()
@@ -164,6 +169,33 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
     multi_category = len(color_values) > 1
 
     fig = go.Figure()
+    annotations = []
+
+    # --- crop stage: a real row at the top (y = -1.3), drawn with the
+    #     same bar/annotation mechanism as everything else below it ---
+    STAGE_ROW_Y = -1.3
+    top_of_axis = -0.5
+    if stage_df is not None and not stage_df.empty:
+        sdf = stage_df.sort_values("start_day").reset_index(drop=True)
+        for i, srow in sdf.iterrows():
+            duration = srow["end_day"] - srow["start_day"]
+            fig.add_trace(go.Bar(
+                x=[duration], y=[STAGE_ROW_Y], base=[srow["start_day"]],
+                orientation="h", width=0.7,
+                marker=dict(color=STAGE_COLORS[i % len(STAGE_COLORS)],
+                            line=dict(color="white", width=1)),
+                hovertemplate=f"<b>{srow[stage_label_col]}</b><br>Day "
+                               f"{srow['start_day']}–{srow['end_day']}<extra></extra>",
+                showlegend=False,
+            ))
+            mid = (srow["start_day"] + srow["end_day"]) / 2
+            annotations.append(dict(
+                x=mid, y=STAGE_ROW_Y, xref="x", yref="y",
+                text=str(srow[stage_label_col]), showarrow=False,
+                font=dict(color="white", size=12, family="Georgia, serif"),
+                xanchor="center", yanchor="middle",
+            ))
+        top_of_axis = STAGE_ROW_Y - 0.8
 
     # --- board rows/boxes ---
     seen_legend = set()
@@ -200,7 +232,6 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
 
     # --- x-axis: plain day-number ticks (0, 20, 40, ...) ---
     xaxis = dict(showgrid=True, title="Day after planting")
-    stage_annotations = []
     if stage_df is not None and not stage_df.empty:
         sdf = stage_df.sort_values("start_day").reset_index(drop=True)
         stage_min = float(sdf["start_day"].min())
@@ -219,29 +250,25 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             range=[stage_min - span * 0.02, stage_max + span * 0.02],
         )
 
-        # --- crop stage as its own label row ABOVE the plot ---
-        for _, r in sdf.iterrows():
-            mid = (r["start_day"] + r["end_day"]) / 2
-            stage_annotations.append(dict(
-                x=mid, y=1.12, xref="x", yref="paper",
-                text=str(r[stage_label_col]), showarrow=False,
-                font=dict(color=RULER_TEXT, size=13, family="Georgia, serif"),
-                yanchor="bottom",
-            ))
+    y_ticks = [row_to_base[r] for r in row_order]
+    y_ticktext = list(row_order)
+    if stage_df is not None and not stage_df.empty:
+        y_ticks = [STAGE_ROW_Y] + y_ticks
+        y_ticktext = ["Crop Stage"] + y_ticktext
 
     fig.update_layout(
         barmode="overlay",
-        height=max(220, 130 + total_lane_rows * 42),
-        margin=dict(l=10, r=10, t=60, b=10),
+        height=max(240, 150 + total_lane_rows * 42),
+        margin=dict(l=10, r=10, t=30, b=10),
         xaxis=xaxis,
         yaxis=dict(
             tickmode="array",
-            tickvals=[row_to_base[r] for r in row_order],
-            ticktext=row_order,
-            range=[n_rows - 0.5, -0.5],
+            tickvals=y_ticks,
+            ticktext=y_ticktext,
+            range=[n_rows - 0.5, top_of_axis],
             title="",
         ),
-        annotations=stage_annotations,
+        annotations=annotations,
         showlegend=multi_category and show_legend,
         legend_title_text=color_col,
     )
