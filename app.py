@@ -3,8 +3,15 @@ Crop Threat & Input Dashboard
 ------------------------------
 Top track: crop growth stage reference timeline (always shown).
 Bottom track: ONE swappable board at a time — Weed / Pest / Disease /
-Fertilizer — selected from the sidebar. Only one board renders at once
-by design (showing all four together is hard to read).
+Fertilizer — selected from the sidebar.
+
+Rendering notes:
+  - Labels are drawn as annotations (not bar-internal text), so they never
+    silently disappear on narrow blocks. Narrow blocks get vertical text.
+  - When a row (e.g. a single weed) has more than one entry that overlaps
+    in time — multiple chemicals tackling the same weed/stage — each entry
+    gets its own sub-lane inside that row instead of hiding behind another
+    block.
 
 Expected workbook: crop_timeline.xlsx, with sheets:
   crop_stage    : crop_id, crop, stage, stage_th, start_day, end_day
@@ -48,6 +55,8 @@ PALETTE = [
     "#BC4749", "#9D4EDD", "#F4A261", "#264653", "#A7C957",
 ]
 
+NARROW_DAY_THRESHOLD = 6  # below this many days, rotate the label vertical
+
 # ----------------------------------------------------------------------
 # Data loading
 # ----------------------------------------------------------------------
@@ -76,15 +85,126 @@ def get_file():
 
 
 # ----------------------------------------------------------------------
-# Chart builders
+# Lane assignment — greedy interval scheduling so overlapping entries in
+# the same row get stacked into parallel sub-lanes instead of hiding
+# behind one another.
 # ----------------------------------------------------------------------
 
-def build_stage_timeline(stage_df: pd.DataFrame, label_col: str) -> go.Figure:
-    """Single-track horizontal reference timeline of crop growth stages."""
-    fig = go.Figure()
-    stage_df = stage_df.sort_values("start_day").reset_index(drop=True)
+def assign_lanes(group: pd.DataFrame):
+    """
+    group: rows belonging to ONE row-category (e.g. one weed), with
+    original dataframe index preserved.
+    Returns: {original_index: lane_number}, total_lanes
+    """
+    lanes_end = []
+    assignment = {}
+    for idx, row in group.sort_values("start_day").iterrows():
+        placed = False
+        for lane_idx in range(len(lanes_end)):
+            if row["start_day"] >= lanes_end[lane_idx]:
+                lanes_end[lane_idx] = row["end_day"]
+                assignment[idx] = lane_idx
+                placed = True
+                break
+        if not placed:
+            lanes_end.append(row["end_day"])
+            assignment[idx] = len(lanes_end) - 1
+    return assignment, max(len(lanes_end), 1)
 
-    for i, row in stage_df.iterrows():
+
+# ----------------------------------------------------------------------
+# Generic chart engine
+# ----------------------------------------------------------------------
+
+def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
+                          color_col: str, hover_fn, title: str,
+                          show_legend: bool = True) -> go.Figure:
+    if df.empty:
+        fig = go.Figure()
+        fig.update_layout(height=120, title=f"{title} — no data for this crop")
+        return fig
+
+    row_order = df.groupby(row_col)["start_day"].min().sort_values().index.tolist()
+    row_to_base = {r: i for i, r in enumerate(row_order)}
+
+    color_values = sorted(df[color_col].dropna().astype(str).unique().tolist())
+    color_map = {v: PALETTE[i % len(PALETTE)] for i, v in enumerate(color_values)}
+    multi_category = len(color_values) > 1
+
+    fig = go.Figure()
+    annotations = []
+    seen_legend = set()
+    row_lane_counts = {}
+
+    for row_val, group in df.groupby(row_col):
+        lane_map, n_lanes = assign_lanes(group)
+        row_lane_counts[row_val] = n_lanes
+        base_y = row_to_base[row_val]
+        lane_height = min(0.8 / n_lanes, 0.4)
+
+        for idx, lane in lane_map.items():
+            row = df.loc[idx]
+            duration = row["end_day"] - row["start_day"]
+            y_center = base_y + (lane - (n_lanes - 1) / 2) * lane_height
+            cat = str(row.get(color_col, ""))
+            color = color_map.get(cat, PALETTE[-1])
+            show_this_legend = multi_category and cat not in seen_legend
+            seen_legend.add(cat)
+
+            fig.add_trace(go.Bar(
+                x=[duration],
+                y=[y_center],
+                base=[row["start_day"]],
+                orientation="h",
+                width=lane_height * 0.85,
+                marker=dict(color=color, line=dict(color="white", width=1)),
+                hovertemplate=hover_fn(row),
+                name=cat if cat else "—",
+                legendgroup=cat,
+                showlegend=show_this_legend,
+            ))
+
+            label = str(row[label_col])
+            angle = -90 if duration < NARROW_DAY_THRESHOLD else 0
+            annotations.append(dict(
+                x=row["start_day"] + duration / 2,
+                y=y_center,
+                text=label,
+                showarrow=False,
+                font=dict(color="white", size=11, family="Georgia, serif"),
+                textangle=angle,
+                xanchor="center",
+                yanchor="middle",
+            ))
+
+    total_lane_rows = sum(row_lane_counts.values())
+    fig.update_layout(
+        barmode="overlay",
+        height=max(160, 70 + total_lane_rows * 40),
+        margin=dict(l=10, r=10, t=30, b=10),
+        xaxis=dict(showgrid=True, title="Day after planting"),
+        yaxis=dict(
+            tickmode="array",
+            tickvals=[row_to_base[r] for r in row_order],
+            ticktext=row_order,
+            range=[len(row_order) - 0.5, -0.5],
+            title="",
+        ),
+        title=title,
+        annotations=annotations,
+        showlegend=multi_category and show_legend,
+        legend_title_text=color_col,
+    )
+    return fig
+
+
+def build_stage_timeline(stage_df: pd.DataFrame, label_col: str) -> go.Figure:
+    """Single-track reference timeline of crop growth stages."""
+    df = stage_df.sort_values("start_day").reset_index(drop=True).copy()
+    fig = go.Figure()
+    annotations = []
+
+    for i, row in df.iterrows():
         duration = row["end_day"] - row["start_day"]
         color = STAGE_COLORS[i % len(STAGE_COLORS)]
         label = str(row[label_col])
@@ -94,88 +214,35 @@ def build_stage_timeline(stage_df: pd.DataFrame, label_col: str) -> go.Figure:
             base=[row["start_day"]],
             orientation="h",
             marker=dict(color=color, line=dict(color="white", width=1)),
-            text=label,
-            textposition="inside",
-            insidetextanchor="middle",
-            textfont=dict(color="white", size=13),
             hovertemplate=f"<b>{label}</b><br>Day {row['start_day']}–{row['end_day']}<extra></extra>",
             showlegend=False,
         ))
+        angle = -90 if duration < NARROW_DAY_THRESHOLD else 0
+        annotations.append(dict(
+            x=row["start_day"] + duration / 2,
+            y="Crop Stage",
+            text=label,
+            showarrow=False,
+            font=dict(color="white", size=12),
+            textangle=angle,
+            xanchor="center",
+            yanchor="middle",
+        ))
 
     fig.update_layout(
-        barmode="stack",
+        barmode="overlay",
         height=140,
         margin=dict(l=10, r=10, t=30, b=10),
         xaxis=dict(showgrid=True, title="Day after planting"),
         yaxis=dict(showticklabels=False),
         title="Crop Growth Stage (reference)",
-        bargap=0.4,
-    )
-    return fig
-
-
-def build_board_timeline(df: pd.DataFrame, row_col: str, label_col: str,
-                          color_col: str, hover_fn, title: str) -> go.Figure:
-    """
-    Generic swappable-board timeline: one row per `row_col` value, one bar
-    per record (a row can have several bars if it has multiple windows),
-    colored by the categories found in `color_col`.
-    """
-    if df.empty:
-        fig = go.Figure()
-        fig.update_layout(height=120, title=f"{title} — no data for this crop")
-        return fig
-
-    row_order = (
-        df.groupby(row_col)["start_day"].min().sort_values().index.tolist()
-    )
-
-    color_values = sorted(df[color_col].dropna().astype(str).unique().tolist())
-    color_map = {v: PALETTE[i % len(PALETTE)] for i, v in enumerate(color_values)}
-
-    fig = go.Figure()
-    seen_legend = set()
-    for _, row in df.iterrows():
-        duration = row["end_day"] - row["start_day"]
-        cat = str(row.get(color_col, ""))
-        color = color_map.get(cat, PALETTE[-1])
-        label = str(row[label_col])
-        show_legend = cat not in seen_legend and len(color_values) > 1
-        seen_legend.add(cat)
-
-        fig.add_trace(go.Bar(
-            x=[duration],
-            y=[row[row_col]],
-            base=[row["start_day"]],
-            orientation="h",
-            marker=dict(color=color, line=dict(color="white", width=1)),
-            text=label,
-            textposition="inside",
-            insidetextanchor="middle",
-            textfont=dict(color="white", size=12, family="Georgia, serif"),
-            hovertemplate=hover_fn(row),
-            name=cat if cat else "—",
-            legendgroup=cat,
-            showlegend=show_legend,
-        ))
-
-    n_rows = max(len(row_order), 1)
-    fig.update_layout(
-        barmode="stack",
-        height=90 + n_rows * 45,
-        margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(showgrid=True, title="Day after planting"),
-        yaxis=dict(categoryorder="array", categoryarray=row_order,
-                   autorange="reversed", title=""),
-        title=title,
-        bargap=0.3,
-        legend_title_text=color_col,
+        annotations=annotations,
     )
     return fig
 
 
 # ----------------------------------------------------------------------
-# Board configs — how to turn each board's sheets into the generic chart
+# Board configs
 # ----------------------------------------------------------------------
 
 def weed_board(crop_id, sheets):
@@ -192,13 +259,16 @@ def weed_board(crop_id, sheets):
         return (
             f"<b><i>{row['weed_science']}</i></b><br>"
             f"{row['weed_name_en']} / {row['weed_name_th']}<br>"
+            f"Stage: {row.get('weed_stage', '')}<br>"
             f"Common name: {row.get('common_name', '')}<br>"
             f"HRAC code: {row.get('hrac_code', '')}<br>"
-            f"Spray stage: {row.get('weed_stage', '')}<br>"
             f"Day {row['start_day']}–{row['end_day']}<extra></extra>"
         )
 
-    fig = build_board_timeline(df, row_col="weed_science", label_col="weed_science",
+    # row = which weed (so the y-axis tells you the target weed);
+    # block label = spray stage (pre-emergence, post-emergence, ...),
+    # since that's what you want visible on the block itself.
+    fig = build_timeline_chart(df, row_col="weed_science", label_col="weed_stage",
                                 color_col="type", hover_fn=hover,
                                 title="Weed Control Windows")
     detail_cols = ["weed_stage", "weed_science", "weed_name_en", "weed_name_th",
@@ -226,7 +296,7 @@ def pest_board(crop_id, sheets):
             f"Day {row['start_day']}–{row['end_day']}<extra></extra>"
         )
 
-    fig = build_board_timeline(df, row_col="pest_name_en", label_col="pest_name_en",
+    fig = build_timeline_chart(df, row_col="pest_name_en", label_col="pest_name_en",
                                 color_col="order", hover_fn=hover,
                                 title="Pest Pressure Windows")
     detail_cols = ["pest_name_en", "pest_name_th", "order", "common_name",
@@ -253,7 +323,7 @@ def disease_board(crop_id, sheets):
             f"Day {row['start_day']}–{row['end_day']}<extra></extra>"
         )
 
-    fig = build_board_timeline(df, row_col="disease_name_sc", label_col="disease_name_sc",
+    fig = build_timeline_chart(df, row_col="disease_name_sc", label_col="disease_name_sc",
                                 color_col="type", hover_fn=hover,
                                 title="Disease Pressure Windows")
     detail_cols = ["disease_name_sc", "disease_name_en", "disease_name_th",
@@ -264,7 +334,7 @@ def disease_board(crop_id, sheets):
 def fertilizer_board(crop_id, sheets):
     fert = sheets["fertilizer"]
     df = fert[fert["crop_id"] == crop_id].copy()
-    df["_none"] = "Fertilizer"  # single-category color column
+    df["_none"] = "Fertilizer"  # single-category color column, no legend needed
 
     def hover(row):
         return (
@@ -272,9 +342,10 @@ def fertilizer_board(crop_id, sheets):
             f"Day {row['start_day']}–{row['end_day']}<extra></extra>"
         )
 
-    fig = build_board_timeline(df, row_col="formula", label_col="formula",
+    fig = build_timeline_chart(df, row_col="formula", label_col="formula",
                                 color_col="_none", hover_fn=hover,
-                                title="Fertilizer Application Windows")
+                                title="Fertilizer Application Windows",
+                                show_legend=False)
     detail_cols = ["formula", "start_day", "end_day"]
     return fig, df, detail_cols
 
