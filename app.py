@@ -198,41 +198,41 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
 
     total_lane_rows = sum(row_lane_counts.values())
 
-    # --- x-axis: day-number ticks (0, 20, 40, ...), with the stage name
-    #     folded into the tick label wherever a stage starts — e.g.
-    #     "0 / Seedling", "20 / Vegetative" — all in ONE row of real axis
-    #     ticks (not a separate annotation layer, which was unreliable).
+    # --- x-axis: plain day-number ticks (0, 20, 40, ...) ---
     xaxis = dict(showgrid=True, title="Day after planting")
+    stage_annotations = []
     if stage_df is not None and not stage_df.empty:
         sdf = stage_df.sort_values("start_day").reset_index(drop=True)
         stage_min = float(sdf["start_day"].min())
         stage_max = float(sdf["end_day"].max())
         span = stage_max - stage_min
 
-        stage_start_labels = {int(r["start_day"]): str(r[stage_label_col]) for _, r in sdf.iterrows()}
-
         step = 20
-        grid_ticks = set(range(0, int(stage_max) + 1, step))
-        all_ticks = sorted(grid_ticks | set(stage_start_labels.keys()) | {int(stage_max)})
-
-        ticktext = []
-        for t in all_ticks:
-            if t in stage_start_labels:
-                ticktext.append(f"{t}<br>{stage_start_labels[t]}")
-            else:
-                ticktext.append(str(t))
+        day_ticks = list(range(0, int(stage_max) + 1, step))
+        if not day_ticks or day_ticks[-1] != int(stage_max):
+            day_ticks.append(int(stage_max))
 
         xaxis.update(
             tickmode="array",
-            tickvals=all_ticks,
-            ticktext=ticktext,
+            tickvals=day_ticks,
+            ticktext=[str(t) for t in day_ticks],
             range=[stage_min - span * 0.02, stage_max + span * 0.02],
         )
 
+        # --- crop stage as its own label row ABOVE the plot ---
+        for _, r in sdf.iterrows():
+            mid = (r["start_day"] + r["end_day"]) / 2
+            stage_annotations.append(dict(
+                x=mid, y=1.12, xref="x", yref="paper",
+                text=str(r[stage_label_col]), showarrow=False,
+                font=dict(color=RULER_TEXT, size=13, family="Georgia, serif"),
+                yanchor="bottom",
+            ))
+
     fig.update_layout(
         barmode="overlay",
-        height=max(200, 110 + total_lane_rows * 42),
-        margin=dict(l=10, r=10, t=45, b=10),
+        height=max(220, 130 + total_lane_rows * 42),
+        margin=dict(l=10, r=10, t=60, b=10),
         xaxis=xaxis,
         yaxis=dict(
             tickmode="array",
@@ -241,7 +241,7 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             range=[n_rows - 0.5, -0.5],
             title="",
         ),
-        title=title,
+        annotations=stage_annotations,
         showlegend=multi_category and show_legend,
         legend_title_text=color_col,
     )
@@ -424,6 +424,14 @@ if crop_stage_df.empty:
     st.warning("No stage data for this crop.")
     st.stop()
 
+BOARD_TITLES = {
+    "Weed": "Weed Control Windows",
+    "Pest": "Pest Pressure Windows",
+    "Disease": "Disease Pressure Windows",
+    "Fertilizer": "Fertilizer Application Windows",
+}
+
+st.subheader(BOARD_TITLES[board_choice])
 fig, board_df, detail_cols = BOARDS[board_choice](crop_id, sheets, crop_stage_df, label_col)
 st.plotly_chart(fig, use_container_width=True)
 
