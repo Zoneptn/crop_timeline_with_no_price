@@ -198,7 +198,10 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
 
     total_lane_rows = sum(row_lane_counts.values())
 
-    # --- x-axis: regular day ticks (0, 20, 40, ...) ---
+    # --- x-axis: day-number ticks (0, 20, 40, ...), with the stage name
+    #     folded into the tick label wherever a stage starts — e.g.
+    #     "0 / Seedling", "20 / Vegetative" — all in ONE row of real axis
+    #     ticks (not a separate annotation layer, which was unreliable).
     xaxis = dict(showgrid=True, title="Day after planting")
     if stage_df is not None and not stage_df.empty:
         sdf = stage_df.sort_values("start_day").reset_index(drop=True)
@@ -206,15 +209,23 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
         stage_max = float(sdf["end_day"].max())
         span = stage_max - stage_min
 
+        stage_start_labels = {int(r["start_day"]): str(r[stage_label_col]) for _, r in sdf.iterrows()}
+
         step = 20
-        day_ticks = list(range(0, int(stage_max) + 1, step))
-        if not day_ticks or day_ticks[-1] != int(stage_max):
-            day_ticks.append(int(stage_max))
+        grid_ticks = set(range(0, int(stage_max) + 1, step))
+        all_ticks = sorted(grid_ticks | set(stage_start_labels.keys()) | {int(stage_max)})
+
+        ticktext = []
+        for t in all_ticks:
+            if t in stage_start_labels:
+                ticktext.append(f"{t}<br>{stage_start_labels[t]}")
+            else:
+                ticktext.append(str(t))
 
         xaxis.update(
             tickmode="array",
-            tickvals=day_ticks,
-            ticktext=[str(t) for t in day_ticks],
+            tickvals=all_ticks,
+            ticktext=ticktext,
             range=[stage_min - span * 0.02, stage_max + span * 0.02],
         )
 
