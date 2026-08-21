@@ -198,12 +198,8 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
 
     total_lane_rows = sum(row_lane_counts.values())
 
-    # --- x-axis: regular day ticks (0, 20, 40, ...) as the main axis,
-    #     with stage names as a second label row underneath. (No axis
-    #     title text here — it was sitting in the same spot as the
-    #     stage-name row and hiding it.) ---
-    xaxis = dict(showgrid=True)
-    stage_annotations = []
+    # --- x-axis: regular day ticks (0, 20, 40, ...) ---
+    xaxis = dict(showgrid=True, title="Day after planting")
     if stage_df is not None and not stage_df.empty:
         sdf = stage_df.sort_values("start_day").reset_index(drop=True)
         stage_min = float(sdf["start_day"].min())
@@ -222,25 +218,10 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             range=[stage_min - span * 0.02, stage_max + span * 0.02],
         )
 
-        for _, r in sdf.iterrows():
-            mid = (r["start_day"] + r["end_day"]) / 2
-            stage_annotations.append(dict(
-                x=mid, y=-0.14, xref="x", yref="paper",
-                text=str(r[stage_label_col]), showarrow=False,
-                font=dict(color=RULER_TEXT, size=12, family="Georgia, serif"),
-                yanchor="top",
-            ))
-        stage_annotations.append(dict(
-            x=0, y=-0.14, xref="paper", yref="paper",
-            text="Day after planting / Stage:", showarrow=False,
-            xanchor="left", yanchor="top",
-            font=dict(color="#666666", size=10),
-        ))
-
     fig.update_layout(
         barmode="overlay",
-        height=max(220, 130 + total_lane_rows * 42),
-        margin=dict(l=10, r=10, t=45, b=55),
+        height=max(200, 110 + total_lane_rows * 42),
+        margin=dict(l=10, r=10, t=45, b=10),
         xaxis=xaxis,
         yaxis=dict(
             tickmode="array",
@@ -250,7 +231,6 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             title="",
         ),
         title=title,
-        annotations=stage_annotations,
         showlegend=multi_category and show_legend,
         legend_title_text=color_col,
     )
