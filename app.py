@@ -140,17 +140,15 @@ def aggregate_chemicals(merged: pd.DataFrame, group_cols: list,
 # Generic chart engine for the swappable boards
 # ----------------------------------------------------------------------
 
-STAGE_BAND_COLORS = ["#F1FAEE", "#E4F1E8"]  # alternating very-light bands
-
-
 def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
                           color_col: str, hover_fn, title: str,
                           stage_df: pd.DataFrame = None, stage_label_col: str = "stage",
                           show_legend: bool = True) -> go.Figure:
     """
-    Single plot: crop growth stage shown as background bands + boundary
-    lines + labels along the top, with the board's rows/boxes drawn on
-    top of it — not a separate chart.
+    Single plot. The crop growth stage isn't drawn as separate chart
+    elements — it's just the x-axis tick labels: each stage's name plus
+    its day range, positioned at that stage's midpoint. The board's
+    rows/boxes are drawn against that labeled axis.
     """
     if df.empty:
         fig = go.Figure()
@@ -166,38 +164,6 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
     multi_category = len(color_values) > 1
 
     fig = go.Figure()
-    shapes = []
-    annotations = []
-
-    # --- crop stage background: bands + boundary lines + top labels ---
-    stage_min, stage_max = None, None
-    if stage_df is not None and not stage_df.empty:
-        sdf = stage_df.sort_values("start_day").reset_index(drop=True)
-        stage_min = float(sdf["start_day"].min())
-        stage_max = float(sdf["end_day"].max())
-        boundaries = sorted(set(sdf["start_day"].tolist() + sdf["end_day"].tolist()))
-
-        for i, srow in sdf.iterrows():
-            shapes.append(dict(
-                type="rect", xref="x", yref="y",
-                x0=srow["start_day"], x1=srow["end_day"],
-                y0=-0.5, y1=n_rows - 0.5,
-                fillcolor=STAGE_BAND_COLORS[i % len(STAGE_BAND_COLORS)],
-                line=dict(width=0), layer="below",
-            ))
-            mid = (srow["start_day"] + srow["end_day"]) / 2
-            annotations.append(dict(
-                x=mid, y=1.0, xref="x", yref="paper",
-                text=str(srow[stage_label_col]), showarrow=False,
-                yanchor="bottom",
-                font=dict(color=RULER_TEXT, size=12, family="Georgia, serif"),
-            ))
-        for b in boundaries:
-            shapes.append(dict(
-                type="line", xref="x", yref="paper",
-                x0=b, x1=b, y0=0, y1=1,
-                line=dict(color=RULER_LINE, width=1, dash="dot"),
-            ))
 
     # --- board rows/boxes ---
     seen_legend = set()
@@ -231,10 +197,23 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             ))
 
     total_lane_rows = sum(row_lane_counts.values())
-    xaxis = dict(showgrid=True, title="Day after planting")
-    if stage_min is not None:
+
+    # --- crop stage as x-axis tick labels: "Stage name<br>start-end" ---
+    xaxis = dict(showgrid=True, title="Day after planting (crop growth stage)")
+    if stage_df is not None and not stage_df.empty:
+        sdf = stage_df.sort_values("start_day").reset_index(drop=True)
+        stage_min = float(sdf["start_day"].min())
+        stage_max = float(sdf["end_day"].max())
         span = stage_max - stage_min
-        xaxis["range"] = [stage_min - span * 0.02, stage_max + span * 0.02]
+        tickvals = [(r["start_day"] + r["end_day"]) / 2 for _, r in sdf.iterrows()]
+        ticktext = [f"{r[stage_label_col]}<br>{int(r['start_day'])}-{int(r['end_day'])}d"
+                    for _, r in sdf.iterrows()]
+        xaxis.update(
+            tickmode="array",
+            tickvals=tickvals,
+            ticktext=ticktext,
+            range=[stage_min - span * 0.02, stage_max + span * 0.02],
+        )
 
     fig.update_layout(
         barmode="overlay",
@@ -249,8 +228,6 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             title="",
         ),
         title=title,
-        shapes=shapes,
-        annotations=annotations,
         showlegend=multi_category and show_legend,
         legend_title_text=color_col,
     )
