@@ -430,25 +430,69 @@ def disease_board(crop_id, sheets, crop_stage_df, stage_label_col):
 
 
 def fertilizer_board(crop_id, sheets, crop_stage_df, stage_label_col):
-    # Fertilizer rows are identified by formula, which has no EN/TH
-    # variant — the language toggle intentionally does not touch it.
+    # Backward/forward compatible: works with the old sheet (just
+    # formula/start_day/end_day) as well as the new one that adds
+    # `stage` (e.g. "First application", "Second application") and
+    # `type` (e.g. "granular", "foliar").
+    is_thai = stage_label_col.endswith("_th")
     fert = sheets["fertilizer"]
     df = fert[fert["crop_id"] == crop_id].copy()
-    df["_none"] = "Fertilizer"
+
+    has_stage = "stage" in df.columns
+    has_type = "type" in df.columns and df["type"].notna().any()
+
+    # --- type filter + "total use" summary (e.g. "foliar + granular") ---
+    if has_type:
+        type_options = sorted(df["type"].dropna().astype(str).unique().tolist())
+        selected_types = st.multiselect(
+            "Fertilizer type", type_options, default=type_options,
+            help="Choose one type, or keep several selected to see them combined "
+                 "on the same timeline (e.g. foliar + granular).",
+        )
+        df = df[df["type"].astype(str).isin(selected_types)] if selected_types else df.iloc[0:0]
+
+        if not df.empty:
+            summary = (
+                df.assign(_days=df["end_day"] - df["start_day"])
+                .groupby("type")
+                .agg(applications=("type", "size"), total_days=("_days", "sum"))
+            )
+            breakdown = " + ".join(
+                f"{t}: {r.applications} app / {r.total_days} days"
+                for t, r in summary.iterrows()
+            )
+            st.caption(f"Total use — {breakdown}")
+
+    # --- row identity/label: stage name on the y-axis, formula in hover ---
+    if has_stage:
+        row_col = "stage"
+        stage_name_col = "stage_th" if (is_thai and "stage_th" in df.columns) else "stage"
+        row_label_map = dict(zip(df[row_col], df[stage_name_col]))
+    else:
+        row_col = "formula"
+        row_label_map = None  # falls back to showing the formula itself
+
+    color_col = "type" if has_type else "_none"
+    if not has_type:
+        df["_none"] = "Fertilizer"
 
     def hover(row):
-        return (
-            f"<b>{row['formula']}</b><br>"
-            f"Day {row['start_day']}–{row['end_day']}<extra></extra>"
-        )
+        parts = [f"<b>{row['formula']}</b>"]
+        if has_stage:
+            parts.append(str(row["stage"]))
+        if has_type:
+            parts.append(f"Type: {row['type']}")
+        parts.append(f"Day {row['start_day']}–{row['end_day']}")
+        return "<br>".join(parts) + "<extra></extra>"
 
-    fig = build_timeline_chart(df, row_col="formula", label_col="formula",
-                                color_col="_none", hover_fn=hover,
+    fig = build_timeline_chart(df, row_col=row_col, label_col=row_col,
+                                color_col=color_col, hover_fn=hover,
                                 title="Fertilizer Application Windows",
                                 stage_df=crop_stage_df, stage_label_col=stage_label_col,
-                                show_legend=False)
-    detail_cols = ["formula", "start_day", "end_day"]
-    return fig, df, detail_cols
+                                show_legend=has_type, row_label_map=row_label_map)
+    detail_cols = [c for c in ["stage", "type", "formula", "start_day", "end_day"]
+                   if c in df.columns]
+    return fig, df[detail_cols], detail_cols
 
 
 BOARDS = {
