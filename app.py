@@ -316,9 +316,10 @@ def weed_board(crop_id, sheets, crop_stage_df, stage_label_col):
     agg = aggregate_chemicals(merged, group_cols, "common_name", "hrac_code", "HRAC")
     df = merged[group_cols].drop_duplicates().merge(agg, on=group_cols)
 
-    # Row identity stays on the language-invariant scientific name;
-    # only the displayed y-axis label switches with the toggle.
-    name_col = "weed_name_th" if is_thai else "weed_name_en"
+    # Row identity stays on the language-invariant scientific name.
+    # English display label uses weed_science itself (not weed_name_en);
+    # Thai display label still switches to weed_name_th.
+    name_col = "weed_name_th" if is_thai else "weed_science"
     row_label_map = dict(zip(df["weed_science"], df[name_col]))
 
     def hover(row):
