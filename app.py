@@ -458,8 +458,6 @@ BOARDS = {
 
 st.title("🌾 Crop Threat & Input Dashboard")
 
-board_choice = st.sidebar.radio("Board", list(BOARDS.keys()), index=0)
-
 data_file = get_file()
 if data_file is None:
     st.warning(
@@ -482,10 +480,12 @@ if stage_df_all.empty:
 crop_lookup = stage_df_all[["crop_id", "crop"]].drop_duplicates()
 crop_name_to_id = dict(zip(crop_lookup["crop"], crop_lookup["crop_id"]))
 
-col1, col2 = st.columns([2, 1])
+col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
     crop_choice = st.selectbox("Crop", list(crop_name_to_id.keys()))
 with col2:
+    board_choice = st.selectbox("Board", list(BOARDS.keys()), index=0)
+with col3:
     stage_label_choice = st.radio("Label language", ["English", "Thai"], horizontal=True)
 label_col = "stage" if stage_label_choice == "English" else "stage_th"
 
