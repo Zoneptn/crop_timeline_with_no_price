@@ -80,6 +80,13 @@ def load_workbook(file):
             # trailing cells in the source workbook — not part of the
             # real schema, just noise from Excel's used-range detection.
             df = df.loc[:, ~df.columns.str.startswith("Unnamed:")]
+            # Trim stray leading/trailing whitespace from every text cell —
+            # otherwise "granular" and "granular " (or similar) are treated
+            # as two different categories (duplicate dropdown entries,
+            # duplicate legend colors, broken row grouping, etc.).
+            for col in df.columns:
+                if df[col].dtype == object:
+                    df[col] = df[col].apply(lambda v: v.strip() if isinstance(v, str) else v)
             sheets[name] = df
         except ValueError:
             sheets[name] = pd.DataFrame()
