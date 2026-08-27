@@ -13,6 +13,10 @@ single box's label/hover, not drawn as separate side-by-side boxes.
 Only genuinely different time windows (e.g. two separate spray dates for
 the same weed) get their own box / sub-lane.
 
+The English/Thai toggle in the sidebar now drives BOTH the crop-stage
+row labels AND the weed/pest/disease row labels on the y-axis. Fertilizer
+row labels (the formula name) are language-agnostic and never change.
+
 Expected workbook: crop_timeline.xlsx, with sheets:
   crop_stage    : crop_id, crop, stage, stage_th, start_day, end_day
   crop_weeds    : crop_id, ws_id, weed_stage, weed_id, weed_name_en,
@@ -72,6 +76,10 @@ def load_workbook(file):
         try:
             df = pd.read_excel(file, sheet_name=name)
             df.columns = [c.strip() for c in df.columns]
+            # Drop the stray "Unnamed: N" spillover columns from blank
+            # trailing cells in the source workbook — not part of the
+            # real schema, just noise from Excel's used-range detection.
+            df = df.loc[:, ~df.columns.str.startswith("Unnamed:")]
             sheets[name] = df
         except ValueError:
             sheets[name] = pd.DataFrame()
@@ -148,12 +156,22 @@ def aggregate_chemicals(merged: pd.DataFrame, group_cols: list,
 def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
                           color_col: str, hover_fn, title: str,
                           stage_df: pd.DataFrame = None, stage_label_col: str = "stage",
-                          show_legend: bool = True) -> go.Figure:
+                          show_legend: bool = True, row_label_map: dict = None) -> go.Figure:
     """
     Single plot. Crop growth stage is drawn as a real row at the top of
     the SAME chart (same x/y coordinate space as the weed/pest/disease
     boxes) — not a floating annotation outside the plot area, which was
     getting clipped by the renderer.
+
+    row_col is the (language-invariant) grouping/identity key for each
+    row — e.g. a weed's scientific name, a pest's English name, a
+    disease's scientific name. row_label_map, if given, maps each of
+    those row_col values to the display label the user should actually
+    see on the y-axis (e.g. the Thai common name when the Thai toggle is
+    selected). If row_label_map is omitted, row_col's own values are
+    used as the display label (this is how the Fertilizer board — whose
+    row identity, the formula name, doesn't change with language — keeps
+    working unmodified).
     """
     if df.empty:
         fig = go.Figure()
@@ -251,7 +269,10 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
         )
 
     y_ticks = [row_to_base[r] for r in row_order]
-    y_ticktext = list(row_order)
+    if row_label_map:
+        y_ticktext = [row_label_map.get(r, r) for r in row_order]
+    else:
+        y_ticktext = list(row_order)
     if stage_df is not None and not stage_df.empty:
         y_ticks = [STAGE_ROW_Y] + y_ticks
         y_ticktext = ["Crop Stage"] + y_ticktext
@@ -280,6 +301,7 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
 # ----------------------------------------------------------------------
 
 def weed_board(crop_id, sheets, crop_stage_df, stage_label_col):
+    is_thai = stage_label_col.endswith("_th")
     weeds = sheets["crop_weeds"]
     her = sheets["weed_her"]
     raw = weeds[weeds["crop_id"] == crop_id].copy()
@@ -294,6 +316,11 @@ def weed_board(crop_id, sheets, crop_stage_df, stage_label_col):
     agg = aggregate_chemicals(merged, group_cols, "common_name", "hrac_code", "HRAC")
     df = merged[group_cols].drop_duplicates().merge(agg, on=group_cols)
 
+    # Row identity stays on the language-invariant scientific name;
+    # only the displayed y-axis label switches with the toggle.
+    name_col = "weed_name_th" if is_thai else "weed_name_en"
+    row_label_map = dict(zip(df["weed_science"], df[name_col]))
+
     def hover(row):
         return (
             f"<b><i>{row['weed_science']}</i></b><br>"
@@ -307,13 +334,15 @@ def weed_board(crop_id, sheets, crop_stage_df, stage_label_col):
     fig = build_timeline_chart(df, row_col="weed_science", label_col="weed_stage",
                                 color_col="type", hover_fn=hover,
                                 title="Weed Control Windows",
-                                stage_df=crop_stage_df, stage_label_col=stage_label_col)
+                                stage_df=crop_stage_df, stage_label_col=stage_label_col,
+                                row_label_map=row_label_map)
     detail_cols = ["weed_stage", "weed_science", "weed_name_en", "weed_name_th",
                     "common_name", "hrac_code", "type", "start_day", "end_day"]
     return fig, merged[detail_cols], detail_cols
 
 
 def pest_board(crop_id, sheets, crop_stage_df, stage_label_col):
+    is_thai = stage_label_col.endswith("_th")
     pest = sheets["crop_pest"]
     ins = sheets["pest_ins"]
     raw = pest[pest["crop_id"] == crop_id].copy()
@@ -328,6 +357,11 @@ def pest_board(crop_id, sheets, crop_stage_df, stage_label_col):
     agg = aggregate_chemicals(merged, group_cols, "common_name", "irac_code", "IRAC")
     df = merged[group_cols].drop_duplicates().merge(agg, on=group_cols)
 
+    # Row identity stays on the English name (language-invariant key);
+    # only the displayed y-axis label switches with the toggle.
+    name_col = "pest_name_th" if is_thai else "pest_name_en"
+    row_label_map = dict(zip(df["pest_name_en"], df[name_col]))
+
     def hover(row):
         return (
             f"<b>{row['pest_name_en']}</b><br>"
@@ -341,13 +375,15 @@ def pest_board(crop_id, sheets, crop_stage_df, stage_label_col):
     fig = build_timeline_chart(df, row_col="pest_name_en", label_col="pest_name_en",
                                 color_col="order", hover_fn=hover,
                                 title="Pest Pressure Windows",
-                                stage_df=crop_stage_df, stage_label_col=stage_label_col)
+                                stage_df=crop_stage_df, stage_label_col=stage_label_col,
+                                row_label_map=row_label_map)
     detail_cols = ["pest_name_en", "pest_name_th", "order", "common_name",
                    "irac_code", "start_day", "end_day"]
     return fig, merged[detail_cols], detail_cols
 
 
 def disease_board(crop_id, sheets, crop_stage_df, stage_label_col):
+    is_thai = stage_label_col.endswith("_th")
     dis = sheets["crop_disease"]
     fun = sheets["disease_fun"]
     raw = dis[dis["crop_id"] == crop_id].copy()
@@ -362,6 +398,11 @@ def disease_board(crop_id, sheets, crop_stage_df, stage_label_col):
     agg = aggregate_chemicals(merged, group_cols, "common_name", "frac_code", "FRAC")
     df = merged[group_cols].drop_duplicates().merge(agg, on=group_cols)
 
+    # Row identity stays on the language-invariant scientific name;
+    # only the displayed y-axis label switches with the toggle.
+    name_col = "disease_name_th" if is_thai else "disease_name_en"
+    row_label_map = dict(zip(df["disease_name_sc"], df[name_col]))
+
     def hover(row):
         return (
             f"<b><i>{row['disease_name_sc']}</i></b><br>"
@@ -374,13 +415,16 @@ def disease_board(crop_id, sheets, crop_stage_df, stage_label_col):
     fig = build_timeline_chart(df, row_col="disease_name_sc", label_col="disease_name_sc",
                                 color_col="type", hover_fn=hover,
                                 title="Disease Pressure Windows",
-                                stage_df=crop_stage_df, stage_label_col=stage_label_col)
+                                stage_df=crop_stage_df, stage_label_col=stage_label_col,
+                                row_label_map=row_label_map)
     detail_cols = ["disease_name_sc", "disease_name_en", "disease_name_th",
                    "common_name", "frac_code", "type", "start_day", "end_day"]
     return fig, merged[detail_cols], detail_cols
 
 
 def fertilizer_board(crop_id, sheets, crop_stage_df, stage_label_col):
+    # Fertilizer rows are identified by formula, which has no EN/TH
+    # variant — the language toggle intentionally does not touch it.
     fert = sheets["fertilizer"]
     df = fert[fert["crop_id"] == crop_id].copy()
     df["_none"] = "Fertilizer"
@@ -441,7 +485,7 @@ col1, col2 = st.columns([2, 1])
 with col1:
     crop_choice = st.selectbox("Crop", list(crop_name_to_id.keys()))
 with col2:
-    stage_label_choice = st.radio("Stage label language", ["English", "Thai"], horizontal=True)
+    stage_label_choice = st.radio("Label language", ["English", "Thai"], horizontal=True)
 label_col = "stage" if stage_label_choice == "English" else "stage_th"
 
 crop_id = crop_name_to_id[crop_choice]
