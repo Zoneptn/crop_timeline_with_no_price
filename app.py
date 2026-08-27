@@ -442,6 +442,7 @@ def fertilizer_board(crop_id, sheets, crop_stage_df, stage_label_col):
     has_type = "type" in df.columns and df["type"].notna().any()
 
     # --- type filter + "total use" summary (e.g. "foliar + granular") ---
+    # Computed on the un-aggregated, one-row-per-formula data.
     if has_type:
         type_options = sorted(df["type"].dropna().astype(str).unique().tolist())
         selected_types = st.multiselect(
@@ -463,36 +464,64 @@ def fertilizer_board(crop_id, sheets, crop_stage_df, stage_label_col):
             )
             st.caption(f"Total use — {breakdown}")
 
-    # --- row identity/label: stage name on the y-axis, formula in hover ---
+    detail_cols = [c for c in ["stage", "type", "formula", "start_day", "end_day"]
+                   if c in df.columns]
+    detail_df = df[detail_cols].copy()
+
+    if df.empty:
+        fig = build_timeline_chart(df, row_col="formula", label_col="formula",
+                                    color_col="_none", hover_fn=lambda r: "",
+                                    title="Fertilizer Application Windows",
+                                    stage_df=crop_stage_df, stage_label_col=stage_label_col)
+        return fig, detail_df, detail_cols
+
+    # --- row identity: stage name on the y-axis ---
+    row_col = "stage" if has_stage else "formula"
     if has_stage:
-        row_col = "stage"
         stage_name_col = "stage_th" if (is_thai and "stage_th" in df.columns) else "stage"
         row_label_map = dict(zip(df[row_col], df[stage_name_col]))
     else:
-        row_col = "formula"
         row_label_map = None  # falls back to showing the formula itself
 
-    color_col = "type" if has_type else "_none"
-    if not has_type:
-        df["_none"] = "Fertilizer"
+    # --- collapse every formula that shares the SAME window (same stage,
+    #     same start/end day) into ONE box with a combined formula list,
+    #     the same way Weed/Pest/Disease combine multiple products. ---
+    group_cols = [c for c in ["crop_id", row_col, "start_day", "end_day"] if c in df.columns]
+
+    def _agg(g):
+        if has_type:
+            items = [
+                f"• {f} ({t})" for f, t in zip(g["formula"], g["type"])
+                if pd.notna(f) or pd.notna(t)
+            ]
+            types_present = sorted({str(t) for t in g["type"].dropna()})
+        else:
+            items = [f"• {f}" for f in g["formula"] if pd.notna(f)]
+            types_present = []
+        return pd.Series({
+            "formula_list_html": "<br>".join(items) if items else "—",
+            "type_combo": " + ".join(types_present) if types_present else "Fertilizer",
+        })
+
+    agg = df.groupby(group_cols, dropna=False).apply(_agg).reset_index()
+    df_agg = df[group_cols].drop_duplicates().merge(agg, on=group_cols)
+
+    color_col = "type_combo"
 
     def hover(row):
-        parts = [f"<b>{row['formula']}</b>"]
+        parts = []
         if has_stage:
-            parts.append(str(row["stage"]))
-        if has_type:
-            parts.append(f"Type: {row['type']}")
+            parts.append(f"<b>{row['stage']}</b>")
         parts.append(f"Day {row['start_day']}–{row['end_day']}")
+        parts.append(f"<br><b>Formula:</b><br>{row['formula_list_html']}")
         return "<br>".join(parts) + "<extra></extra>"
 
-    fig = build_timeline_chart(df, row_col=row_col, label_col=row_col,
+    fig = build_timeline_chart(df_agg, row_col=row_col, label_col=row_col,
                                 color_col=color_col, hover_fn=hover,
                                 title="Fertilizer Application Windows",
                                 stage_df=crop_stage_df, stage_label_col=stage_label_col,
                                 show_legend=has_type, row_label_map=row_label_map)
-    detail_cols = [c for c in ["stage", "type", "formula", "start_day", "end_day"]
-                   if c in df.columns]
-    return fig, df[detail_cols], detail_cols
+    return fig, detail_df, detail_cols
 
 
 BOARDS = {
