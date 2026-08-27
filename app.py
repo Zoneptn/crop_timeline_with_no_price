@@ -178,7 +178,13 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
         fig.update_layout(height=120, title=f"{title} — no data for this crop")
         return fig
 
-    row_order = df.groupby(row_col)["start_day"].min().sort_values().index.tolist()
+    order_df = (
+        df.groupby(row_col)
+        .agg(**{color_col: (color_col, "first"), "start_day": ("start_day", "min")})
+        .reset_index()
+        .sort_values([color_col, "start_day"])
+    )
+    row_order = order_df[row_col].tolist()
     row_to_base = {r: i for i, r in enumerate(row_order)}
     n_rows = len(row_order)
 
