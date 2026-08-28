@@ -38,18 +38,38 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
-username = st.text_input("Username")
-password = st.text_input("Password", type="password")
+# -----------------------------
+# Login credentials from Secrets
+# -----------------------------
+USERNAME = st.secrets["login"]["username"]
+PASSWORD = st.secrets["login"]["password"]
 
-if st.button("Login"):
-    if (
-        username == st.secrets["login"]["username"]
-        and password == st.secrets["login"]["password"]
-    ):
-        st.session_state["logged_in"] = True
 
-if st.session_state.get("logged_in"):
-    st.write("Welcome")
+# -----------------------------
+# Initialize login state
+# -----------------------------
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+
+# -----------------------------
+# Login page
+# -----------------------------
+if not st.session_state.logged_in:
+
+    st.title("🔐 Login")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+
+        if username == USERNAME and password == PASSWORD:
+            st.session_state.logged_in = True
+            st.rerun()
+
+        else:
+            st.error("❌ Incorrect username or password")
 
 st.set_page_config(page_title="Crop Threat & Input Dashboard", layout="wide")
 
