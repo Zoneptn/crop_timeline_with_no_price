@@ -5,16 +5,16 @@ Top track: a continuous rice growth timeline (0 -> last day), stage
 boundaries marked as ruler ticks, stage names as labels between ticks —
 like a ruler, not separate colored chips.
 
-Bottom track: ONE swappable board at a time — Weed / Pest / Disease /
+Bottom track: ONE swappable board at a time — Weed / Insect / Disease /
 Fertilizer — selected from the sidebar. Each real-world window (a weed's
-pre-emergence window, a pest's pressure window, etc.) is ONE box, even if
+pre-emergence window, an insect's pressure window, etc.) is ONE box, even if
 several chemicals/products apply to it — those are combined into that
 single box's label/hover, not drawn as separate side-by-side boxes.
 Only genuinely different time windows (e.g. two separate spray dates for
 the same weed) get their own box / sub-lane.
 
 The English/Thai toggle in the sidebar now drives BOTH the crop-stage
-row labels AND the weed/pest/disease row labels on the y-axis. Fertilizer
+row labels AND the weed/insect/disease row labels on the y-axis. Fertilizer
 row labels (the formula name) are language-agnostic and never change.
 
 Expected workbook: crop_timeline.xlsx, with sheets:
@@ -132,7 +132,7 @@ def assign_lanes(group: pd.DataFrame):
 
 # ----------------------------------------------------------------------
 # Chemical aggregation — collapse multiple chemical/product rows that
-# belong to the SAME window (same weed/pest/disease + same start/end)
+# belong to the SAME window (same weed/insect/disease + same start/end)
 # into one row with a combined chemical list, so the chart draws ONE box.
 # ----------------------------------------------------------------------
 
@@ -166,12 +166,12 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
                           show_legend: bool = True, row_label_map: dict = None) -> go.Figure:
     """
     Single plot. Crop growth stage is drawn as a real row at the top of
-    the SAME chart (same x/y coordinate space as the weed/pest/disease
+    the SAME chart (same x/y coordinate space as the weed/insect/disease
     boxes) — not a floating annotation outside the plot area, which was
     getting clipped by the renderer.
 
     row_col is the (language-invariant) grouping/identity key for each
-    row — e.g. a weed's scientific name, a pest's English name, a
+    row — e.g. a weed's scientific name, an insect's English name, a
     disease's scientific name. row_label_map, if given, maps each of
     those row_col values to the display label the user should actually
     see on the y-axis (e.g. the Thai common name when the Thai toggle is
@@ -355,7 +355,7 @@ def weed_board(crop_id, sheets, crop_stage_df, stage_label_col):
     return fig, merged[detail_cols], detail_cols
 
 
-def pest_board(crop_id, sheets, crop_stage_df, stage_label_col):
+def insect_board(crop_id, sheets, crop_stage_df, stage_label_col):
     is_thai = stage_label_col.endswith("_th")
     pest = sheets["crop_pest"]
     ins = sheets["pest_ins"]
@@ -380,7 +380,7 @@ def pest_board(crop_id, sheets, crop_stage_df, stage_label_col):
         return (
             f"<b>{row['pest_name_en']}</b><br>"
             f"{row['pest_name_th']}<br>"
-            f"Order: {row.get('order', '')}<br>"
+            f"Insect order: {row.get('order', '')}<br>"
             f"Day {row['start_day']}–{row['end_day']}<br>"
             f"<br><b>Products:</b><br>{row['chem_list_html']}"
             "<extra></extra>"
@@ -388,7 +388,7 @@ def pest_board(crop_id, sheets, crop_stage_df, stage_label_col):
 
     fig = build_timeline_chart(df, row_col="pest_name_en", label_col="pest_name_en",
                                 color_col="order", hover_fn=hover,
-                                title="Pest Pressure Windows",
+                                title="Insect Pressure Windows",
                                 stage_df=crop_stage_df, stage_label_col=stage_label_col,
                                 row_label_map=row_label_map)
     detail_cols = ["pest_name_en", "pest_name_th", "order", "common_name",
@@ -492,7 +492,7 @@ def fertilizer_board(crop_id, sheets, crop_stage_df, stage_label_col):
 
     # --- collapse every formula that shares the SAME window (same stage,
     #     same start/end day) into ONE box with a combined formula list,
-    #     the same way Weed/Pest/Disease combine multiple products. ---
+    #     the same way Weed/Insect/Disease combine multiple products. ---
     group_cols = [c for c in ["crop_id", row_col, "start_day", "end_day"] if c in df.columns]
 
     def _agg(g):
@@ -533,7 +533,7 @@ def fertilizer_board(crop_id, sheets, crop_stage_df, stage_label_col):
 
 BOARDS = {
     "Weed": weed_board,
-    "Pest": pest_board,
+    "Insect": insect_board,
     "Disease": disease_board,
     "Fertilizer": fertilizer_board,
 }
@@ -584,7 +584,7 @@ if crop_stage_df.empty:
 
 BOARD_TITLES = {
     "Weed": "Weed Control Windows",
-    "Pest": "Pest Pressure Windows",
+    "Insect": "Insect Pressure Windows",
     "Disease": "Disease Pressure Windows",
     "Fertilizer": "Fertilizer Application Windows",
 }
