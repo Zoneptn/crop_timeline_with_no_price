@@ -147,7 +147,7 @@ def aggregate_chemicals(merged: pd.DataFrame, group_cols: list,
         pairs = [p for p in pairs if p[0] not in ("", "nan") or p[1] not in ("", "nan")]
         count = len(pairs)
         if count:
-            chem_html = "<br>".join(f"• {n} ({code_label} {c})" for n, c in pairs)
+            chem_html = "<br>".join(f"• {n} ({c})" for n, c in pairs)
         else:
             chem_html = "—"
         return pd.Series({"chem_count": count, "chem_list_html": chem_html})
