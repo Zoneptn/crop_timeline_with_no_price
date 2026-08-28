@@ -38,6 +38,19 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
+username = st.text_input("Username")
+password = st.text_input("Password", type="password")
+
+if st.button("Login"):
+    if (
+        username == st.secrets["login"]["username"]
+        and password == st.secrets["login"]["password"]
+    ):
+        st.session_state["logged_in"] = True
+
+if st.session_state.get("logged_in"):
+    st.write("Welcome")
+
 st.set_page_config(page_title="Crop Threat & Input Dashboard", layout="wide")
 
 DEFAULT_PATH = "crop_timeline.xlsx"
