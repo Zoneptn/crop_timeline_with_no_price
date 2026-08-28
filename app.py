@@ -223,7 +223,7 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             annotations.append(dict(
                 x=mid, y=STAGE_ROW_Y, xref="x", yref="y",
                 text=str(srow[stage_label_col]), showarrow=False,
-                font=dict(color="white", size=12, family="Georgia, serif"),
+                font=dict(color="white", size=17, family="Georgia, serif"),
                 xanchor="center", yanchor="middle",
             ))
         top_of_axis = STAGE_ROW_Y - 0.8
@@ -262,7 +262,8 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
     total_lane_rows = sum(row_lane_counts.values())
 
     # --- x-axis: plain day-number ticks (0, 20, 40, ...) ---
-    xaxis = dict(showgrid=True, title="Day after planting")
+    xaxis = dict(showgrid=True, title=dict(text="Day after planting", font=dict(size=19)),
+                 tickfont=dict(size=18))
     if stage_df is not None and not stage_df.empty:
         sdf = stage_df.sort_values("start_day").reset_index(drop=True)
         stage_min = float(sdf["start_day"].min())
@@ -292,7 +293,7 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
 
     fig.update_layout(
         barmode="overlay",
-        height=max(240, 150 + total_lane_rows * 42),
+        height=max(240, 150 + total_lane_rows * 54),
         margin=dict(l=10, r=10, t=30, b=10),
         xaxis=xaxis,
         yaxis=dict(
@@ -301,10 +302,15 @@ def build_timeline_chart(df: pd.DataFrame, row_col: str, label_col: str,
             ticktext=y_ticktext,
             range=[n_rows - 0.5, top_of_axis],
             title="",
+            tickfont=dict(size=19),
+            automargin=True,
         ),
         annotations=annotations,
         showlegend=multi_category and show_legend,
         legend_title_text=color_col,
+        legend=dict(font=dict(size=17)),
+        hoverlabel=dict(font=dict(size=20), align="left"),
+        font=dict(size=17),
     )
     return fig
 
@@ -458,18 +464,6 @@ def fertilizer_board(crop_id, sheets, crop_stage_df, stage_label_col):
                  "on the same timeline (e.g. foliar + granular).",
         )
         df = df[df["type"].astype(str).isin(selected_types)] if selected_types else df.iloc[0:0]
-
-        if not df.empty:
-            summary = (
-                df.assign(_days=df["end_day"] - df["start_day"])
-                .groupby("type")
-                .agg(applications=("type", "size"), total_days=("_days", "sum"))
-            )
-            breakdown = " + ".join(
-                f"{t}: {r.applications} app / {r.total_days} days"
-                for t, r in summary.iterrows()
-            )
-            st.caption(f"Total use — {breakdown}")
 
     detail_cols = [c for c in ["stage", "type", "formula", "start_day", "end_day"]
                    if c in df.columns]
