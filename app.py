@@ -40,32 +40,6 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Crop Threat & Input Dashboard", layout="wide")
 
-# -----------------------------
-# Login gate (credentials from .streamlit/secrets.toml, e.g.:
-#   [login]
-#   username = "your_username"
-#   password = "your_password"
-# ) — nothing below this block renders until logged in.
-# -----------------------------
-USERNAME = st.secrets["login"]["username"]
-PASSWORD = st.secrets["login"]["password"]
-
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-
-if not st.session_state.logged_in:
-    st.title("🔐 Login")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-        if username == USERNAME and password == PASSWORD:
-            st.session_state.logged_in = True
-            st.rerun()
-        else:
-            st.error("❌ Incorrect username or password")
-
-    st.stop()
 
 DEFAULT_PATH = "crop_timeline.xlsx"
 
@@ -564,10 +538,6 @@ BOARDS = {
 # ----------------------------------------------------------------------
 
 st.title("🌾 Crop Threat & Input Dashboard")
-
-if st.sidebar.button("🚪 Log out"):
-    st.session_state.logged_in = False
-    st.rerun()
 
 data_file = get_file()
 if data_file is None:
